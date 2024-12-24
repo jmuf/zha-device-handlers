@@ -1,7 +1,6 @@
 """Tuya illuminance sensors."""
 
 import math
-from typing import Dict
 
 from zigpy.profiles import zgp, zha
 from zigpy.quirks import CustomDevice
@@ -46,7 +45,7 @@ class TuyaIlluminanceMeasurement(IlluminanceMeasurement, TuyaLocalCluster):
 class TuyaIlluminanceCluster(TuyaMCUCluster):
     """Tuya Illuminance cluster."""
 
-    dp_to_attribute: Dict[int, DPToAttributeMapping] = {
+    dp_to_attribute: dict[int, DPToAttributeMapping] = {
         TUYA_BRIGHTNESS_LEVEL_DP: DPToAttributeMapping(
             TuyaIlluminanceMeasurement.ep_attribute,
             "manufacturer_brightness_level",
@@ -73,6 +72,7 @@ class TuyaIlluminance(CustomDevice):
         #  input_clusters=[4, 5, 61184, 0], output_clusters=[25, 10])
         MODELS_INFO: [
             ("_TZE200_khx7nnka", "TS0601"),
+            ("_TZE204_khx7nnka", "TS0601"),
             ("_TZE200_yi4jtqq1", "TS0601"),
         ],
         ENDPOINTS: {

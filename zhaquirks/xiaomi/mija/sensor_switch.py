@@ -1,4 +1,5 @@
 """Xiaomi mija button device."""
+
 import asyncio
 
 from zigpy.profiles import zha
@@ -95,13 +96,12 @@ class MijaButton(XiaomiQuickInitDevice):
                     self._timer_handle = self._loop.call_later(
                         self.hold_duration, self._hold_timeout
                     )
+                elif self._timer_handle:
+                    self._timer_handle.cancel()
+                    self._timer_handle = None
+                    click_type = COMMAND_SINGLE
                 else:
-                    if self._timer_handle:
-                        self._timer_handle.cancel()
-                        self._timer_handle = None
-                        click_type = COMMAND_SINGLE
-                    else:
-                        self.listener_event(ZHA_SEND_EVENT, COMMAND_RELEASE, [])
+                    self.listener_event(ZHA_SEND_EVENT, COMMAND_RELEASE, [])
 
             # Handle Multi Clicks
             elif attrid == 32768:

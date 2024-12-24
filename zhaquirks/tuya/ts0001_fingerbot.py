@@ -1,4 +1,6 @@
-from typing import Any, Dict, Optional, Union
+"""Tuya Fingerbot device."""
+
+from typing import Any, Optional, Union
 
 from zigpy.profiles import zha
 import zigpy.types as t
@@ -13,40 +15,56 @@ from zhaquirks.const import (
     OUTPUT_CLUSTERS,
     PROFILE_ID,
 )
-from zhaquirks.tuya import TUYA_SEND_DATA
+from zhaquirks.tuya import TUYA_SEND_DATA, EnchantedDevice
 from zhaquirks.tuya.mcu import (
     DPToAttributeMapping,
-    EnchantedDevice,
-    TuyaEnchantableCluster,
     TuyaMCUCluster,
     TuyaPowerConfigurationCluster,
 )
 
 
 class FingerBotMode(t.enum8):
+    """FingerBot mode."""
+
     CLICK = 0x00
     SWITCH = 0x01
     PROGRAM = 0x02
 
 
 class FingerBotReverse(t.enum8):
+    """FingerBot reverse."""
+
     UP_ON = 0x00
     UP_OFF = 0x01
 
 
 class TuyaFingerbotCluster(TuyaMCUCluster):
-    attributes = TuyaMCUCluster.attributes.copy()
-    attributes.update(
-        {
-            101: ("mode", FingerBotMode),
-            102: ("down_movement", t.uint16_t),
-            103: ("sustain_time", t.uint16_t),
-            104: ("reverse", FingerBotReverse),
-            105: ("battery", t.uint16_t),
-            106: ("up_movement", t.uint16_t),
-            107: ("touch_control", t.Bool),
-        }
-    )
+    """Tuya Fingerbot cluster."""
+
+    class AttributeDefs(TuyaMCUCluster.AttributeDefs):
+        """Attribute Definitions."""
+
+        mode = foundation.ZCLAttributeDef(
+            id=101, type=FingerBotMode, is_manufacturer_specific=True
+        )
+        down_movement = foundation.ZCLAttributeDef(
+            id=102, type=t.uint16_t, is_manufacturer_specific=True
+        )
+        sustain_time = foundation.ZCLAttributeDef(
+            id=103, type=t.uint16_t, is_manufacturer_specific=True
+        )
+        reverse = foundation.ZCLAttributeDef(
+            id=104, type=FingerBotReverse, is_manufacturer_specific=True
+        )
+        battery = foundation.ZCLAttributeDef(
+            id=105, type=t.uint16_t, is_manufacturer_specific=True
+        )
+        up_movement = foundation.ZCLAttributeDef(
+            id=106, type=t.uint16_t, is_manufacturer_specific=True
+        )
+        touch_control = foundation.ZCLAttributeDef(
+            id=107, type=t.Bool, is_manufacturer_specific=True
+        )
 
     async def command(
         self,
@@ -68,7 +86,7 @@ class TuyaFingerbotCluster(TuyaMCUCluster):
             **kwargs,
         )
 
-    dp_to_attribute: Dict[int, DPToAttributeMapping] = {
+    dp_to_attribute: dict[int, DPToAttributeMapping] = {
         # Mode
         101: DPToAttributeMapping(
             TuyaMCUCluster.ep_attribute,
@@ -112,11 +130,9 @@ class TuyaFingerbotCluster(TuyaMCUCluster):
     }
 
 
-class OnOffEnchantable(TuyaEnchantableCluster, OnOff):
-    """Enchantable OnOff cluster."""
-
-
 class TuyaFingerbot(EnchantedDevice):
+    """Tuya finger bot device."""
+
     signature = {
         MODELS_INFO: [("_TZ3210_dse8ogfy", "TS0001"), ("_TZ3210_j4pdtz9v", "TS0001")],
         ENDPOINTS: {
@@ -125,7 +141,7 @@ class TuyaFingerbot(EnchantedDevice):
                 DEVICE_TYPE: zha.DeviceType.ON_OFF_SWITCH,
                 INPUT_CLUSTERS: [
                     Basic.cluster_id,
-                    OnOffEnchantable.cluster_id,
+                    OnOff.cluster_id,
                     TuyaFingerbotCluster.cluster_id,
                 ],
                 OUTPUT_CLUSTERS: [
@@ -144,7 +160,7 @@ class TuyaFingerbot(EnchantedDevice):
                 INPUT_CLUSTERS: [
                     Basic.cluster_id,
                     TuyaPowerConfigurationCluster,
-                    OnOffEnchantable,
+                    OnOff.cluster_id,
                     TuyaFingerbotCluster,
                 ],
                 OUTPUT_CLUSTERS: [

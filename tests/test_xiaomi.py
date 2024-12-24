@@ -1,4 +1,5 @@
 """Tests for xiaomi."""
+
 import asyncio
 import logging
 import math
@@ -30,8 +31,11 @@ from zigpy.zcl.clusters.measurement import (
 from zigpy.zcl.clusters.security import IasZone
 from zigpy.zcl.clusters.smartenergy import Metering
 
+from tests.common import ZCL_OCC_ATTR_RPT_OCC, ClusterListener
 import zhaquirks
 from zhaquirks.const import (
+    BUTTON_1,
+    BUTTON_2,
     DEVICE_TYPE,
     ENDPOINTS,
     INPUT_CLUSTERS,
@@ -86,13 +90,11 @@ from zhaquirks.xiaomi.aqara.thermostat_agl001 import ScheduleEvent, ScheduleSett
 import zhaquirks.xiaomi.aqara.weather
 import zhaquirks.xiaomi.mija.motion
 
-from tests.common import ZCL_OCC_ATTR_RPT_OCC, ClusterListener
-
 zhaquirks.setup()
 
 
 def create_aqara_attr_report(attributes):
-    """Creates a special Aqara attriubte report with t.Single as a type for all values."""
+    """Create a special Aqara attribute report with t.Single as a type for all values."""
     serialized_data = b""
     for key, value in attributes.items():
         tv = foundation.TypeValue(0x39, t.Single(value))  # mostly used
@@ -216,7 +218,7 @@ def test_xiaomi_quick_init_wrong_ep(raw_device, ep_id, cluster, message):
         ),  # wrong command
         (
             0,
-            b"\x18\x00\xFF\x05\x00B\x11lumi.sensor_sm0ke\x01\x00 \x01",
+            b"\x18\x00\xff\x05\x00B\x11lumi.sensor_sm0ke\x01\x00 \x01",
         ),  # unknown command
         (0, b"\x18\x00\n\x04\x00B\x11lumi.sensor_sm0ke\x01\x00 \x01"),  # wrong attr id
         (0, b"\x18\x00\n\x05\x00B\x11lumi.sensor_sm0ke\x01\x00 "),  # data under run
@@ -509,20 +511,19 @@ async def test_xiaomi_eu_plug_binding(zigpy_device_from_quirk, quirk):
         assert len(request_mock.mock_calls) == 1
         assert mock_task.call_count == 1
 
-        assert request_mock.mock_calls[0][1] == (
-            4,
-            1,
-            b"\x01\x01\x03\x00\x00",
-        )
+        assert request_mock.mock_calls[0]
+        assert request_mock.mock_calls[0].kwargs["cluster"] == 4
+        assert request_mock.mock_calls[0].kwargs["sequence"] == 1
+        assert request_mock.mock_calls[0].kwargs["data"] == b"\x01\x01\x03\x00\x00"
 
         # Await call writing OppleMode attribute
         await mock_task.call_args[0][0]
 
         assert len(request_mock.mock_calls) == 2
-        assert request_mock.mock_calls[1][1] == (
-            64704,
-            2,
-            b"\x04_\x11\x02\x02\t\x00 \x01",
+        assert request_mock.mock_calls[1].kwargs["cluster"] == 64704
+        assert request_mock.mock_calls[1].kwargs["sequence"] == 2
+        assert (
+            request_mock.mock_calls[1].kwargs["data"] == b"\x04_\x11\x02\x02\t\x00 \x01"
         )
 
 
@@ -625,9 +626,9 @@ async def test_aqara_feeder_write_attrs(
 
     expected_attr_def = opple_cluster.find_attribute(0xFFF1)
     expected = foundation.Attribute(0xFFF1, foundation.TypeValue())
-    expected.value.type = foundation.DATA_TYPES.pytype_to_datatype_id(
+    expected.value.type = foundation.DataType.from_python_type(
         expected_attr_def.type
-    )
+    ).type_id
     expected.value.value = expected_attr_def.type(expected_bytes)
 
     await opple_cluster.write_attributes({attribute: value}, manufacturer=0x115F)
@@ -921,8 +922,11 @@ async def test_xiaomi_e1_thermostat_rw_redirection(
     )
 
     with (
-        patch_opple_read
-    ), patch_thermostat_read, patch_opple_write, patch_thermostat_write:
+        patch_opple_read,
+        patch_thermostat_read,
+        patch_opple_write,
+        patch_thermostat_write,
+    ):
         # test reads:
 
         # read system_mode attribute from thermostat cluster
@@ -934,9 +938,12 @@ async def test_xiaomi_e1_thermostat_rw_redirection(
         assert opple_cluster._read_attributes.mock_calls[0][1][0] == [
             0x0271
         ]  # Opple system_mode attribute
-        assert thermostat_listener.attribute_updates[0] == (
-            Thermostat.AttributeDefs.system_mode.id,
-            Thermostat.SystemMode.Heat,
+        assert (
+            thermostat_listener.attribute_updates[0]
+            == (
+                Thermostat.AttributeDefs.system_mode.id,
+                Thermostat.SystemMode.Heat,
+            )
         )  # check that attributes are correctly mapped and updated on ZCL thermostat cluster
 
         thermostat_cluster._read_attributes.reset_mock()
@@ -1033,7 +1040,7 @@ async def test_xiaomi_e1_thermostat_attribute_update(zigpy_device_from_quirk, qu
 async def test_xiaomi_e1_thermostat_schedule_settings_string_representation(
     schedule_settings,
 ):
-    """Test creation of ScheduleSettings from str and converting back to same str"""
+    """Test creation of ScheduleSettings from str and converting back to same str."""
 
     s = ScheduleSettings(schedule_settings)
     assert str(s) == schedule_settings
@@ -1066,7 +1073,7 @@ async def test_xiaomi_e1_thermostat_schedule_settings_string_representation(
 async def test_xiaomi_e1_thermostat_schedule_settings_data_validation(
     schedule_settings,
 ):
-    """Test data validation of ScheduleSettings class"""
+    """Test data validation of ScheduleSettings class."""
 
     with pytest.raises(Exception):
         ScheduleSettings(schedule_settings)
@@ -1080,7 +1087,7 @@ async def test_xiaomi_e1_thermostat_schedule_settings_data_validation(
     ],
 )
 async def test_xiaomi_e1_thermostat_schedule_event_data_validation(schedule_event):
-    """Test data validation of ScheduleEvent class"""
+    """Test data validation of ScheduleEvent class."""
 
     with pytest.raises(Exception):
         ScheduleEvent(schedule_event)
@@ -1127,12 +1134,13 @@ async def test_xiaomi_e1_thermostat_schedule_settings_deserialization(
     (
         (zhaquirks.xiaomi.aqara.motion_ac02.LumiMotionAC02, 0),
         (zhaquirks.xiaomi.aqara.motion_agl02.MotionT1, -1),
+        (zhaquirks.xiaomi.aqara.motion_acn001.MotionE1, -1),
     ),
 )
 async def test_xiaomi_p1_t1_motion_sensor(
     zigpy_device_from_quirk, quirk, invalid_iilluminance_report
 ):
-    """Test Aqara P1 and T1 motion sensors."""
+    """Test Aqara P1, T1, and E1 motion sensors."""
 
     device = zigpy_device_from_quirk(quirk)
 
@@ -1184,12 +1192,12 @@ async def test_xiaomi_p1_t1_motion_sensor(
     opple_cluster.update_attribute(274, 0xFFFF)
 
     # confirm invalid illuminance report is interpreted as 0 for P1 sensor,
-    # and -1 for the T1 sensor, as it doesn't seem like the T1 sensor sends invalid illuminance reports
+    # and -1 for the T1/E1 sensors, as they don't seem to send invalid illuminance reports
     assert len(illuminance_listener.attribute_updates) == 2
     assert illuminance_listener.attribute_updates[1][0] == zcl_iilluminance_id
     assert illuminance_listener.attribute_updates[1][1] == invalid_iilluminance_report
 
-    # send illuminance report only
+    # send illuminance report only, parsed via Xiaomi cluster implementation
     opple_cluster.update_attribute(
         XIAOMI_AQARA_ATTRIBUTE_E1, create_aqara_attr_report({101: 20})
     )
@@ -1350,10 +1358,10 @@ async def test_xiaomi_motion_sensor_misc(
 
 @pytest.mark.parametrize("quirk", (zhaquirks.xiaomi.aqara.plug.Plug,))
 async def test_xiaomi_power_cluster_not_used(zigpy_device_from_quirk, caplog, quirk):
-    """Test that a log is printed which warns when a device reports battery mV readout,
-    even though XiaomiPowerConfigurationCluster is not used.
+    """Test log is printed which warns when a device reports battery mV readout.
 
-    This explicitly uses the Plug quirk which will always report this message, as this shouldn't have a battery readout.
+    ... even though XiaomiPowerConfigurationCluster is not used. This explicitly uses the Plug quirk
+    which will always report this message, as this shouldn't have a battery readout.
     Other battery-powered devices might implement the XiaomiPowerConfigurationCluster in the future,
     so they would no longer report this message.
     """
@@ -1610,31 +1618,6 @@ async def test_xiaomi_e1_roller_commands_1(zigpy_device_from_quirk, command, val
 
 
 @pytest.mark.parametrize(
-    "quirk",
-    (zhaquirks.xiaomi.aqara.switch_acn047.AqaraT2Relay,),
-)
-async def test_aqara_t2_relay(zigpy_device_from_quirk, quirk):
-    """Test Aqara T2 relay."""
-
-    device = zigpy_device_from_quirk(quirk)
-    mi_cluster = device.endpoints[1].multistate_input
-    mi_listener = ClusterListener(mi_cluster)
-
-    mi_cluster.update_attribute(MultistateInput.AttributeDefs.present_value.id, 1)
-    assert len(mi_listener.attribute_updates) == 1
-    assert mi_listener.attribute_updates[0][0] == 0
-    assert mi_listener.attribute_updates[0][1] == "single"
-
-    mi_cluster.update_attribute(MultistateInput.AttributeDefs.state_text.id, "foo")
-    assert len(mi_listener.attribute_updates) == 2
-    assert (
-        mi_listener.attribute_updates[1][0]
-        == MultistateInput.AttributeDefs.state_text.id
-    )
-    assert mi_listener.attribute_updates[1][1] == "foo"
-
-
-@pytest.mark.parametrize(
     "command, value",
     [
         (WindowCovering.ServerCommandDefs.go_to_lift_percentage.id, 60),
@@ -1664,7 +1647,32 @@ async def test_xiaomi_e1_roller_commands_2(zigpy_device_from_quirk, command, val
     )
 
 
+@pytest.mark.parametrize("endpoint", [(1), (2)])
+async def test_aqara_t2_relay(zigpy_device_from_quirk, endpoint):
+    """Test Aqara T2 relay."""
+
+    device = zigpy_device_from_quirk(zhaquirks.xiaomi.aqara.switch_acn047.AqaraT2Relay)
+    mi_cluster = device.endpoints[endpoint].multistate_input
+    mi_listener = ClusterListener(mi_cluster)
+
+    buttons = {1: BUTTON_1, 2: BUTTON_2}
+
+    mi_cluster.update_attribute(MultistateInput.AttributeDefs.present_value.id, 1)
+    assert len(mi_listener.attribute_updates) == 1
+    assert mi_listener.attribute_updates[0][0] == 0
+    assert mi_listener.attribute_updates[0][1] == buttons[endpoint]
+
+    mi_cluster.update_attribute(MultistateInput.AttributeDefs.state_text.id, "foo")
+    assert len(mi_listener.attribute_updates) == 2
+    assert (
+        mi_listener.attribute_updates[1][0]
+        == MultistateInput.AttributeDefs.state_text.id
+    )
+    assert mi_listener.attribute_updates[1][1] == "foo"
+
+
 def test_aqara_acn003_signature_match(assert_signature_matches_quirk):
+    """Test signature."""
     signature = {
         "node_descriptor": "NodeDescriptor(logical_type=<LogicalType.Router: 1>, complex_descriptor_available=0, user_descriptor_available=0, reserved=0, aps_flags=0, frequency_band=<FrequencyBand.Freq2400MHz: 8>, mac_capability_flags=<MACCapabilityFlags.FullFunctionDevice|MainsPowered|RxOnWhenIdle|AllocateAddress: 142>, manufacturer_code=4447, maximum_buffer_size=82, maximum_incoming_transfer_size=82, server_mask=11264, maximum_outgoing_transfer_size=82, descriptor_capability_field=<DescriptorCapability.NONE: 0>, *allocate_address=True, *is_alternate_pan_coordinator=False, *is_coordinator=False, *is_end_device=False, *is_full_function_device=True, *is_mains_powered=True, *is_receiver_on_when_idle=True, *is_router=True, *is_security_capable=False)",
         "endpoints": {
@@ -1695,6 +1703,7 @@ def test_aqara_acn003_signature_match(assert_signature_matches_quirk):
 
 
 def test_aqara_acn014_signature_match(assert_signature_matches_quirk):
+    """Test signature."""
     signature = {
         "node_descriptor": "NodeDescriptor(logical_type=<LogicalType.Router: 1>, complex_descriptor_available=0, user_descriptor_available=0, reserved=0, aps_flags=0, frequency_band=<FrequencyBand.Freq2400MHz: 8>, mac_capability_flags=<MACCapabilityFlags.FullFunctionDevice|MainsPowered|RxOnWhenIdle|AllocateAddress: 142>, manufacturer_code=4447, maximum_buffer_size=82, maximum_incoming_transfer_size=82, server_mask=11264, maximum_outgoing_transfer_size=82, descriptor_capability_field=<DescriptorCapability.NONE: 0>, *allocate_address=True, *is_alternate_pan_coordinator=False, *is_coordinator=False, *is_end_device=False, *is_full_function_device=True, *is_mains_powered=True, *is_receiver_on_when_idle=True, *is_router=True, *is_security_capable=False)",
         "endpoints": {
@@ -1747,3 +1756,51 @@ def test_aqara_acn014_signature_match(assert_signature_matches_quirk):
     assert_signature_matches_quirk(
         zhaquirks.xiaomi.aqara.light_acn.LumiLightAcn014, signature
     )
+
+
+@pytest.mark.parametrize(
+    "occupancy_value, expected_occ_status, motion_value, expected_motion_status",
+    [
+        (0, OccupancySensing.Occupancy.Unoccupied, 2, 0),
+        (1, OccupancySensing.Occupancy.Occupied, 3, IasZone.ZoneStatus.Alarm_1),
+        (1, OccupancySensing.Occupancy.Occupied, 4, 0),
+    ],
+)
+async def test_aqara_fp1e_sensor(
+    zigpy_device_from_v2_quirk,
+    occupancy_value,
+    expected_occ_status,
+    motion_value,
+    expected_motion_status,
+):
+    """Test Aqara FP1E sensor."""
+    quirk = zigpy_device_from_v2_quirk("aqara", "lumi.sensor_occupy.agl1")
+
+    opple_cluster = quirk.endpoints[1].opple_cluster
+    ias_cluster = quirk.endpoints[1].ias_zone
+    occupancy_cluster = quirk.endpoints[1].occupancy
+
+    opple_listener = ClusterListener(opple_cluster)
+    ias_listener = ClusterListener(ias_cluster)
+    occupancy_listener = ClusterListener(occupancy_cluster)
+
+    # update custom occupancy attribute id
+    opple_cluster.update_attribute(0x0142, occupancy_value)
+    assert len(opple_listener.attribute_updates) == 1
+
+    # confirm occupancy cluster is updated
+    assert len(occupancy_listener.attribute_updates) == 1
+    assert (
+        occupancy_listener.attribute_updates[0][0]
+        == OccupancySensing.AttributeDefs.occupancy.id
+    )
+    assert occupancy_listener.attribute_updates[0][1] == expected_occ_status
+
+    # update custom motion attribute id
+    opple_cluster.update_attribute(0x0160, motion_value)
+    assert len(opple_listener.attribute_updates) == 2
+
+    # confirm ias cluster is updated
+    assert len(ias_listener.attribute_updates) == 1
+    assert ias_listener.attribute_updates[0][0] == IasZone.AttributeDefs.zone_status.id
+    assert ias_listener.attribute_updates[0][1] == expected_motion_status

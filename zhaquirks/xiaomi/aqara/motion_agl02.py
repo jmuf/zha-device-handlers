@@ -1,7 +1,10 @@
 """Xiaomi aqara T1 motion sensor device."""
+
+from __future__ import annotations
+
 from zigpy.profiles import zha
 from zigpy.zcl.clusters.general import Identify, Ota
-from zigpy.zcl.clusters.measurement import IlluminanceMeasurement, OccupancySensing
+from zigpy.zcl.clusters.measurement import OccupancySensing
 
 from zhaquirks import Bus
 from zhaquirks.const import (
@@ -16,30 +19,12 @@ from zhaquirks.xiaomi import (
     LUMI,
     BasicCluster,
     IlluminanceMeasurementCluster,
+    LocalOccupancyCluster,
     MotionCluster,
-    OccupancyCluster,
-    XiaomiAqaraE1Cluster,
     XiaomiCustomDevice,
+    XiaomiMotionManufacturerCluster,
     XiaomiPowerConfiguration,
 )
-
-XIAOMI_CLUSTER_ID = 0xFCC0
-
-
-class XiaomiManufacturerCluster(XiaomiAqaraE1Cluster):
-    """Xiaomi manufacturer cluster."""
-
-    def _update_attribute(self, attrid, value):
-        super()._update_attribute(attrid, value)
-        if attrid == 274:
-            value = value - 65536
-            self.endpoint.illuminance.update_attribute(
-                IlluminanceMeasurement.AttributeDefs.measured_value.id, value
-            )
-            self.endpoint.occupancy.update_attribute(
-                OccupancySensing.AttributeDefs.occupancy.id,
-                OccupancySensing.Occupancy.Occupied,
-            )
 
 
 class MotionT1(XiaomiCustomDevice):
@@ -71,6 +56,7 @@ class MotionT1(XiaomiCustomDevice):
             }
         },
     }
+
     replacement = {
         ENDPOINTS: {
             1: {
@@ -78,10 +64,10 @@ class MotionT1(XiaomiCustomDevice):
                     BasicCluster,
                     XiaomiPowerConfiguration,
                     Identify.cluster_id,
-                    OccupancyCluster,
+                    LocalOccupancyCluster,
                     MotionCluster,
                     IlluminanceMeasurementCluster,
-                    XiaomiManufacturerCluster,
+                    XiaomiMotionManufacturerCluster,
                 ],
                 OUTPUT_CLUSTERS: [Identify.cluster_id, Ota.cluster_id],
             }

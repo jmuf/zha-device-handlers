@@ -1,14 +1,18 @@
 """Xiaomi common components for custom device handlers."""
+
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 import logging
 import math
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 from zigpy import types as t
 import zigpy.device
 from zigpy.profiles import zha
 from zigpy.quirks import CustomCluster, CustomDevice
+from zigpy.typing import AddressingMode
+from zigpy.zcl import foundation
 from zigpy.zcl.clusters.general import (
     AnalogInput,
     Basic,
@@ -20,13 +24,13 @@ from zigpy.zcl.clusters.general import (
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
 from zigpy.zcl.clusters.measurement import (
     IlluminanceMeasurement,
+    OccupancySensing,
     PressureMeasurement,
     RelativeHumidity,
     TemperatureMeasurement,
 )
 from zigpy.zcl.clusters.security import IasZone
 from zigpy.zcl.clusters.smartenergy import Metering
-import zigpy.zcl.foundation as foundation
 import zigpy.zdo
 from zigpy.zdo.types import NodeDescriptor
 
@@ -162,10 +166,13 @@ class XiaomiCluster(CustomCluster):
             attr_val = t.LVBytes(val)
             attr_type = 0x41  # The data type should be "Octet String"
 
-            yield foundation.Attribute(
-                attrid=attr_id,
-                value=foundation.TypeValue(type=attr_type, value=attr_val),
-            ), final_data
+            yield (
+                foundation.Attribute(
+                    attrid=attr_id,
+                    value=foundation.TypeValue(type=attr_type, value=attr_val),
+                ),
+                final_data,
+            )
 
     def _interpret_attr_reports(
         self, data: bytes
@@ -383,7 +390,11 @@ class XiaomiCluster(CustomCluster):
             attribute_names.update({11: ILLUMINANCE_MEASUREMENT})
         elif self.endpoint.device.model == "lumi.curtain.acn002":
             attribute_names.update({101: BATTERY_PERCENTAGE_REMAINING_ATTRIBUTE})
-        elif self.endpoint.device.model in ["lumi.motion.agl02", "lumi.motion.ac02"]:
+        elif self.endpoint.device.model in [
+            "lumi.motion.agl02",
+            "lumi.motion.ac02",
+            "lumi.motion.acn001",
+        ]:
             attribute_names.update({101: ILLUMINANCE_MEASUREMENT})
             if self.endpoint.device.model == "lumi.motion.ac02":
                 attribute_names.update({105: DETECTION_INTERVAL})
@@ -458,6 +469,22 @@ class XiaomiAqaraE1Cluster(XiaomiCluster):
     ep_attribute = "opple_cluster"
 
 
+class XiaomiMotionManufacturerCluster(XiaomiAqaraE1Cluster):
+    """Xiaomi manufacturer cluster to parse motion and illuminance reports."""
+
+    def _update_attribute(self, attrid, value):
+        super()._update_attribute(attrid, value)
+        if attrid == 274:
+            value = value - 65536
+            self.endpoint.illuminance.update_attribute(
+                IlluminanceMeasurement.AttributeDefs.measured_value.id, value
+            )
+            self.endpoint.occupancy.update_attribute(
+                OccupancySensing.AttributeDefs.occupancy.id,
+                OccupancySensing.Occupancy.Occupied,
+            )
+
+
 class BinaryOutputInterlock(CustomCluster, BinaryOutput):
     """Xiaomi binaryoutput cluster with added interlock attribute."""
 
@@ -511,7 +538,7 @@ class XiaomiPowerConfiguration(PowerConfiguration, LocalDataCluster):
 
 
 class XiaomiPowerConfigurationPercent(XiaomiPowerConfiguration):
-    """Power cluster which ignores Xiaomi voltage reports for calculating battery percentage
+    """Power cluster which ignores Xiaomi voltage reports for calculating battery percentage.
 
     Devices that use this cluster (E1 curtain driver/roller) already send the battery percentage on their own
     as a separate attribute, but additionally also send the battery voltage.
@@ -536,6 +563,19 @@ class MotionCluster(LocalDataCluster, MotionOnEvent):
 
     _CONSTANT_ATTRIBUTES = {IasZone.AttributeDefs.zone_type.id: MOTION_TYPE}
     reset_s: int = 70
+
+
+class LocalOccupancyCluster(LocalDataCluster, OccupancyCluster):
+    """Local occupancy cluster that ignores messages from device."""
+
+    def handle_cluster_general_request(
+        self,
+        hdr: zigpy.zcl.foundation.ZCLHeader,
+        args: list,
+        *,
+        dst_addressing: AddressingMode | None = None,
+    ) -> None:
+        """Ignore occupancy attribute reports on this cluster, as they're invalid and sent by the sensor every hour."""
 
 
 class DeviceTemperatureCluster(LocalDataCluster, DeviceTemperature):

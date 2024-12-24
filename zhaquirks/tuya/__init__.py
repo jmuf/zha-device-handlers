@@ -1,15 +1,17 @@
 """Tuya devices."""
+
+from collections.abc import Callable
 import dataclasses
 import datetime
 import enum
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 from zigpy.quirks import CustomCluster, CustomDevice
 import zigpy.types as t
-from zigpy.zcl import foundation
+from zigpy.zcl import BaseAttributeDefs, foundation
 from zigpy.zcl.clusters.closures import WindowCovering
-from zigpy.zcl.clusters.general import LevelControl, OnOff, PowerConfiguration
+from zigpy.zcl.clusters.general import Basic, LevelControl, OnOff, PowerConfiguration
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
 from zigpy.zcl.clusters.hvac import Thermostat, UserInterface
 from zigpy.zcl.clusters.smartenergy import Metering
@@ -31,19 +33,20 @@ TUYA_CLUSTER_ID = 0xEF00
 TUYA_CLUSTER_E000_ID = 0xE000
 TUYA_CLUSTER_E001_ID = 0xE001
 TUYA_CLUSTER_1888_ID = 0x1888
+TUYA_CLUSTER_ED00_ID = 0xED00
 # ---------------------------------------------------------
 # Tuya Cluster Commands
 # ---------------------------------------------------------
 TUYA_SET_DATA = 0x00
 TUYA_GET_DATA = 0x01
 TUYA_SET_DATA_RESPONSE = 0x02
+TUYA_QUERY_DATA = 0x03
 TUYA_SEND_DATA = 0x04
 TUYA_ACTIVE_STATUS_RPT = 0x06
 TUYA_SET_TIME = 0x24
 # TODO: To be checked
 TUYA_MCU_VERSION_REQ = 0x10
 TUYA_MCU_VERSION_RSP = 0x11
-#
 TUYA_LEVEL_COMMAND = 514
 
 LEVEL_EVENT = "level_event"
@@ -202,7 +205,7 @@ class TuyaData(t.Struct):
             raise ValueError(f"Unknown {self.dp_type} datapoint type")
 
     def __new__(cls, *args, **kwargs):
-        """Disable copy constrctor."""
+        """Disable copy constructor."""
         return super().__new__(cls)
 
     def __init__(self, value=None, function=0, *args, **kwargs):
@@ -215,7 +218,7 @@ class TuyaData(t.Struct):
             self.dp_type = TuyaDPType.BITMAP
         elif isinstance(value, (bool, t.Bool)):
             self.dp_type = TuyaDPType.BOOL
-        elif isinstance(value, enum.Enum):  # type: ignore # noqa
+        elif isinstance(value, enum.Enum):  # type: ignore
             self.dp_type = TuyaDPType.ENUM
         elif isinstance(value, int):
             self.dp_type = TuyaDPType.VALUE
@@ -235,7 +238,7 @@ class Data(t.List, item_type=t.uint8_t):
         if value is None:
             super().__init__()
             return
-        if type(value) is list or type(value) is bytes:
+        if type(value) is list or type(value) is bytes:  # noqa: E721
             super().__init__(value)
             return
         # serialized in little-endian by zigpy
@@ -403,7 +406,7 @@ class TuyaManufCluster(CustomCluster):
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: Tuple,
+        args: tuple,
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
@@ -430,7 +433,7 @@ class TuyaManufCluster(CustomCluster):
         payload = TuyaTimePayload()
         utc_timestamp = int(
             (
-                datetime.datetime.utcnow()
+                datetime.datetime.utcnow()  # noqa: DTZ003
                 - datetime.datetime(self.set_time_offset, 1, 1)
             ).total_seconds()
         )
@@ -456,7 +459,7 @@ class TuyaManufClusterAttributes(TuyaManufCluster):
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: Tuple,
+        args: tuple,
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
@@ -526,47 +529,48 @@ class TuyaManufClusterAttributes(TuyaManufCluster):
         return [[foundation.WriteAttributesStatusRecord(foundation.Status.SUCCESS)]]
 
 
-class TuyaEnchantableCluster(CustomCluster):
-    """Tuya cluster that casts a magic spell if `TUYA_SPELL` is set.
+class EnchantedDevice(CustomDevice):
+    """Class for Tuya devices which need to be unlocked by casting a 'spell'.
 
-    Preferably, make the device inherit from `EnchantedDevice` and use a subclass of this class in the replacement.
-
-    This will only work for clusters that ZHA calls bind() on.
-    At the moment, ZHA does NOT do this for:
-    - Basic cluster
-    - Identify cluster
-    - Groups cluster
-    - OTA cluster
-    - GreenPowerProxy cluster
-    - LightLink cluster
-    - non-registered manufacturer specific clusters
-    - clusters which would be bound, but that changed their ep_attribute
-
-    Make sure to add a subclass of TuyaEnchantableCluster to the quirk replacement. Tests will fail if this is not done.
-    Classes like TuyaOnOff, TuyaZBOnOffAttributeCluster, TuyaNoBindPowerConfigurationCluster inherit from this class.
+    The spell is applied during device configuration.
     """
 
-    async def bind(self):
-        """Bind cluster and start casting the spell if necessary."""
-        # check if the device needs to have the spell cast
-        # and since the cluster can be used on multiple endpoints, check that it's endpoint 1
-        if (
-            getattr(self.endpoint.device, "TUYA_SPELL", False)
-            and self.endpoint.endpoint_id == 1
-        ):
-            await self.spell()
-        return await super().bind()
+    # These values can be overridden from a quirk to enable (or disable) additional Tuya spells:
+    tuya_spell_read_attributes: bool = True  # spell reading attributes on Basic cluster
+    tuya_spell_data_query: bool = False  # additional spell needed for some devices
 
-    async def spell(self):
-        """Cast spell, so the Tuya device works correctly."""
-        self.debug("Executing spell on Tuya device %s", self.endpoint.device.ieee)
+    async def apply_custom_configuration(self, *args, **kwargs):
+        """Hooks device configuration to apply custom configuration."""
+        # cast Tuya spell
+        if self.tuya_spell_read_attributes:
+            await self.spell_attribute_reads()
+        if self.tuya_spell_data_query:
+            await self.spell_data_query()
+
+        # also apply custom configuration to clusters if defined
+        await super().apply_custom_configuration(*args, **kwargs)
+
+    async def spell_attribute_reads(self):
+        """Cast 'attribute read' spell, so the Tuya device works correctly."""
+        self.debug(
+            "Executing attribute read spell on Tuya device %s",
+            self.ieee,
+        )
         attr_to_read = [4, 0, 1, 5, 7, 0xFFFE]
-        basic_cluster = self.endpoint.device.endpoints[1].in_clusters[0]
+        basic_cluster = self.endpoints[1].in_clusters[Basic.cluster_id]
         await basic_cluster.read_attributes(attr_to_read)
-        self.debug("Executed spell on Tuya device %s", self.endpoint.device.ieee)
+        self.debug("Executed attribute read spell on Tuya device %s", self.ieee)
+
+    async def spell_data_query(self):
+        """Cast 'data query' spell, also required for some Tuya devices to send data."""
+        self.debug("Executing data query spell on Tuya device %s", self.ieee)
+        # tests verify that a device with an enabled 'data query spell' has a TuyaNewManufCluster (subclass)
+        tuya_cluster = self.endpoints[1].in_clusters[TuyaNewManufCluster.cluster_id]
+        await tuya_cluster.command(TUYA_QUERY_DATA)
+        self.debug("Executed data query spell on Tuya device %s", self.ieee)
 
 
-class TuyaOnOff(TuyaEnchantableCluster, OnOff):
+class TuyaOnOff(CustomCluster, OnOff):
     """Tuya On/Off cluster for On/Off device."""
 
     def __init__(self, *args, **kwargs):
@@ -624,7 +628,7 @@ class TuyaManufacturerClusterOnOff(TuyaManufCluster):
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: Tuple[TuyaManufCluster.Command],
+        args: tuple[TuyaManufCluster.Command],
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
@@ -860,7 +864,7 @@ class TuyaLocalCluster(LocalDataCluster):
     """
 
     def update_attribute(self, attr_name: str, value: Any) -> None:
-        """Update attribute by attribute name."""
+        """Update attribute by name and safeguard against unknown attributes."""
 
         try:
             attr = self.attributes_by_name[attr_name]
@@ -870,11 +874,8 @@ class TuyaLocalCluster(LocalDataCluster):
         return self._update_attribute(attr.id, value)
 
 
-class _TuyaNoBindPowerConfigurationCluster(CustomCluster, PowerConfiguration):
-    """PowerConfiguration cluster that prevents setting up binding/attribute reports in order to stop battery drain.
-
-    Note: Use the `TuyaNoBindPowerConfigurationCluster` class instead of this one.
-    """
+class TuyaNoBindPowerConfigurationCluster(CustomCluster, PowerConfiguration):
+    """PowerConfiguration cluster that prevents setting up binding/attribute reports in order to stop battery drain."""
 
     async def bind(self):
         """Prevent bind."""
@@ -885,23 +886,15 @@ class _TuyaNoBindPowerConfigurationCluster(CustomCluster, PowerConfiguration):
         return (foundation.ConfigureReportingResponse.deserialize(b"\x00")[0],)
 
 
-# these classes are needed, so the execution order of bind() is still correct
-class TuyaNoBindPowerConfigurationCluster(
-    TuyaEnchantableCluster, _TuyaNoBindPowerConfigurationCluster
-):
-    """PowerConfiguration cluster that prevents setting up binding/attribute reports in order to stop battery drain.
-
-    This class is also enchantable, so it will cast the Tuya spell if the device inherits from `EnchantedDevice`.
-    """
-
-
 class TuyaPowerConfigurationCluster(PowerConfiguration, TuyaLocalCluster):
     """PowerConfiguration cluster for battery-operated thermostats."""
 
     def __init__(self, *args, **kwargs):
         """Init."""
         super().__init__(*args, **kwargs)
-        self.endpoint.device.battery_bus.add_listener(self)
+        # listening to battery_bus required for legacy and custom Tuya TRV quirks
+        if hasattr(self.endpoint.device, "battery_bus"):
+            self.endpoint.device.battery_bus.add_listener(self)
 
     def battery_change(self, value):
         """Change of reported battery percentage remaining."""
@@ -911,42 +904,40 @@ class TuyaPowerConfigurationCluster(PowerConfiguration, TuyaLocalCluster):
 class TuyaPowerConfigurationCluster2AAA(PowerConfiguration, TuyaLocalCluster):
     """PowerConfiguration cluster for devices with 2 AAA."""
 
-    BATTERY_SIZES = 0x0031
-    BATTERY_QUANTITY = 0x0033
-    BATTERY_RATED_VOLTAGE = 0x0034
-
     _CONSTANT_ATTRIBUTES = {
-        BATTERY_SIZES: 4,
-        BATTERY_QUANTITY: 2,
-        BATTERY_RATED_VOLTAGE: 15,
+        PowerConfiguration.AttributeDefs.battery_size.id: 4,
+        PowerConfiguration.AttributeDefs.battery_rated_voltage.id: 15,
+        PowerConfiguration.AttributeDefs.battery_quantity.id: 2,
     }
 
 
 class TuyaPowerConfigurationCluster2AA(TuyaPowerConfigurationCluster):
     """PowerConfiguration cluster for devices with 2 AA."""
 
-    BATTERY_SIZES = 0x0031
-    BATTERY_RATED_VOLTAGE = 0x0034
-    BATTERY_QUANTITY = 0x0033
-
     _CONSTANT_ATTRIBUTES = {
-        BATTERY_SIZES: 3,
-        BATTERY_RATED_VOLTAGE: 15,
-        BATTERY_QUANTITY: 2,
+        PowerConfiguration.AttributeDefs.battery_size.id: 3,
+        PowerConfiguration.AttributeDefs.battery_rated_voltage.id: 15,
+        PowerConfiguration.AttributeDefs.battery_quantity.id: 2,
     }
 
 
 class TuyaPowerConfigurationCluster3AA(TuyaPowerConfigurationCluster):
     """PowerConfiguration cluster for devices with 3 AA."""
 
-    BATTERY_SIZES = 0x0031
-    BATTERY_RATED_VOLTAGE = 0x0034
-    BATTERY_QUANTITY = 0x0033
+    _CONSTANT_ATTRIBUTES = {
+        PowerConfiguration.AttributeDefs.battery_size.id: 3,
+        PowerConfiguration.AttributeDefs.battery_rated_voltage.id: 15,
+        PowerConfiguration.AttributeDefs.battery_quantity.id: 3,
+    }
+
+
+class TuyaPowerConfigurationCluster4AA(PowerConfiguration, TuyaLocalCluster):
+    """PowerConfiguration cluster for devices with 4 AA."""
 
     _CONSTANT_ATTRIBUTES = {
-        BATTERY_SIZES: 3,
-        BATTERY_RATED_VOLTAGE: 15,
-        BATTERY_QUANTITY: 3,
+        PowerConfiguration.AttributeDefs.battery_size.id: 3,
+        PowerConfiguration.AttributeDefs.battery_rated_voltage.id: 15,
+        PowerConfiguration.AttributeDefs.battery_quantity.id: 4,
     }
 
 
@@ -985,7 +976,7 @@ class PowerOnState(t.enum8):
     LastState = 0x02
 
 
-class TuyaZBOnOffAttributeCluster(TuyaEnchantableCluster, OnOff):
+class TuyaZBOnOffAttributeCluster(CustomCluster, OnOff):
     """Tuya Zigbee On Off cluster with extra attributes."""
 
     attributes = OnOff.attributes.copy()
@@ -1041,7 +1032,7 @@ class TuyaSmartRemoteOnOffCluster(OnOff, EventableCluster):
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: List[Any],
+        args: list[Any],
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
@@ -1143,14 +1134,14 @@ class TuyaManufacturerWindowCover(TuyaManufCluster):
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: Tuple[TuyaManufCluster.Command],
+        args: tuple[TuyaManufCluster.Command],
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
         ] = None,
     ) -> None:
         """Handle cluster request."""
-        """Tuya Specific Cluster Commands"""
+        # Tuya Specific Cluster Commands
         if hdr.command_id in (TUYA_GET_DATA, TUYA_SET_DATA_RESPONSE):
             tuya_payload = args[0]
             _LOGGER.debug(
@@ -1165,16 +1156,11 @@ class TuyaManufacturerWindowCover(TuyaManufCluster):
                 tuya_payload.data,
             )
 
-            if tuya_payload.command_id == TUYA_DP_TYPE_VALUE + TUYA_DP_ID_PERCENT_STATE:
-                self.endpoint.device.cover_bus.listener_event(
-                    COVER_EVENT,
-                    ATTR_COVER_POSITION,
-                    tuya_payload.data[4],
-                )
-            elif (
-                tuya_payload.command_id
-                == TUYA_DP_TYPE_VALUE + TUYA_DP_ID_PERCENT_CONTROL
-            ):
+            ids = [
+                TUYA_DP_TYPE_VALUE + TUYA_DP_ID_PERCENT_STATE,
+                TUYA_DP_TYPE_VALUE + TUYA_DP_ID_PERCENT_CONTROL,
+            ]
+            if tuya_payload.command_id in ids:
                 self.endpoint.device.cover_bus.listener_event(
                     COVER_EVENT,
                     ATTR_COVER_POSITION,
@@ -1213,7 +1199,7 @@ class TuyaManufacturerWindowCover(TuyaManufCluster):
 class TuyaWindowCoverControl(LocalDataCluster, WindowCovering):
     """Manufacturer Specific Cluster of Device cover."""
 
-    """Add additional attributes for direction"""
+    # Add additional attributes for direction
     attributes = WindowCovering.attributes.copy()
     attributes.update({ATTR_COVER_DIRECTION: ("motor_direction", t.Bool)})
     attributes.update({ATTR_COVER_INVERTED: ("cover_inverted", t.Bool)})
@@ -1349,7 +1335,7 @@ class TuyaManufacturerLevelControl(TuyaManufCluster):
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: Tuple[TuyaManufCluster.Command],
+        args: tuple[TuyaManufCluster.Command],
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
@@ -1487,7 +1473,13 @@ class TuyaNewManufCluster(CustomCluster):
     cluster_id: t.uint16_t = TUYA_CLUSTER_ID
     ep_attribute: str = "tuya_manufacturer"
 
+    class AttributeDefs(BaseAttributeDefs):
+        """Attribute Definitions."""
+
     server_commands = {
+        TUYA_QUERY_DATA: foundation.ZCLCommandDef(
+            "query_data", {}, False, is_manufacturer_specific=True
+        ),
         TUYA_SET_DATA: foundation.ZCLCommandDef(
             "set_data", {"data": TuyaCommand}, False, is_manufacturer_specific=True
         ),
@@ -1520,12 +1512,40 @@ class TuyaNewManufCluster(CustomCluster):
         ),
     }
 
-    data_point_handlers: Dict[int, str] = {}
+    dp_to_attribute: dict[int, DPToAttributeMapping] = {}
+    data_point_handlers: dict[int, str] = {}
+
+    def __init__(self, *args, **kwargs):
+        """Initialize the cluster and mark attributes as valid on LocalDataClusters."""
+        super().__init__(*args, **kwargs)
+        for dp_map in self.dp_to_attribute.values():
+            # get the endpoint that is being mapped to
+            endpoint = self.endpoint
+            if dp_map.endpoint_id:
+                endpoint = self.endpoint.device.endpoints.get(dp_map.endpoint_id)
+
+            # the endpoint to be mapped to might not actually exist within all quirks
+            if not endpoint:
+                continue
+
+            cluster = getattr(endpoint, dp_map.ep_attribute, None)
+            # the cluster to be mapped to might not actually exist within all quirks
+            if not cluster:
+                continue
+
+            # mark mapped to attribute as valid if existing and if on a LocalDataCluster
+            attr = cluster.attributes_by_name.get(dp_map.attribute_name)
+            if attr and isinstance(cluster, LocalDataCluster):
+                # _VALID_ATTRIBUTES is only a class variable, but as want to modify it
+                # per instance here, we need to create an instance variable first
+                if "_VALID_ATTRIBUTES" not in cluster.__dict__:
+                    cluster._VALID_ATTRIBUTES = set()
+                cluster._VALID_ATTRIBUTES.add(attr.id)
 
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: Tuple,
+        args: tuple,
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
@@ -1534,7 +1554,7 @@ class TuyaNewManufCluster(CustomCluster):
         """Handle cluster specific request."""
 
         try:
-            if hdr.direction == foundation.Direction.Client_to_Server:
+            if hdr.direction == foundation.Direction.Server_to_Client:
                 # server_cluster -> client_cluster cluster specific command
                 handler_name = f"handle_{self.client_commands[hdr.command_id].name}"
             else:

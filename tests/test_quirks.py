@@ -1,4 +1,5 @@
 """General quirk tests."""
+
 from __future__ import annotations
 
 import collections
@@ -8,19 +9,21 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from zigpy import zcl
 import zigpy.device
 import zigpy.endpoint
 import zigpy.profiles
 import zigpy.quirks as zq
 from zigpy.quirks import CustomDevice
+from zigpy.quirks.v2 import QuirkBuilder
 import zigpy.types
-import zigpy.zcl as zcl
+from zigpy.zcl import foundation
 import zigpy.zdo.types
 
 import zhaquirks
+from zhaquirks import const
 import zhaquirks.bosch.motion
 import zhaquirks.centralite.cl_3310S
-import zhaquirks.const as const
 from zhaquirks.const import (
     ARGS,
     COMMAND,
@@ -65,6 +68,7 @@ for manufacturer in zq._DEVICE_REGISTRY._registry.values():
             ALL_QUIRK_CLASSES.append(quirk)
 
 del quirk, model_quirk_list, manufacturer
+
 
 ALL_ZIGPY_CLUSTERS = frozenset(zcl.clusters.CLUSTERS_BY_NAME.values())
 
@@ -278,14 +282,13 @@ def test_dev_from_signature(
         assert ep.status == zigpy.endpoint.Status.ZDO_INIT
         assert ep.profile_id == ep_data[PROFILE_ID]
         assert ep.device_type == ep_data[DEVICE_TYPE]
-        assert [cluster_id for cluster_id in ep.in_clusters] == ep_data[INPUT_CLUSTERS]
-        assert [cluster_id for cluster_id in ep.out_clusters] == ep_data[
-            OUTPUT_CLUSTERS
-        ]
+        assert list(ep.in_clusters) == ep_data[INPUT_CLUSTERS]
+        assert list(ep.out_clusters) == ep_data[OUTPUT_CLUSTERS]
 
 
 @pytest.mark.parametrize(
-    "quirk", (q for q in ALL_QUIRK_CLASSES if issubclass(q, zhaquirks.QuickInitDevice))
+    "quirk",
+    (q for q in ALL_QUIRK_CLASSES if issubclass(q, zhaquirks.QuickInitDevice)),
 )
 def test_quirk_quickinit(quirk: zigpy.quirks.CustomDevice) -> None:
     """Make sure signature in QuickInit Devices have all required attributes."""
@@ -304,12 +307,23 @@ def test_quirk_quickinit(quirk: zigpy.quirks.CustomDevice) -> None:
         assert isinstance(ep_data[OUTPUT_CLUSTERS], list)
 
 
-@pytest.mark.parametrize("quirk", ALL_QUIRK_CLASSES)
+@pytest.mark.parametrize(
+    "quirk",
+    [
+        quirk_cls
+        for quirk_cls in ALL_QUIRK_CLASSES
+        if quirk_cls
+        not in (
+            # Some devices have empty model info:
+            zhaquirks.tuya.ty0201.TuyaTempHumiditySensorNoModel,
+        )
+    ],
+)
 def test_signature(quirk: CustomDevice) -> None:
     """Make sure signature look sane for all custom devices."""
 
     def _check_range(cluster: zcl.Cluster) -> bool:
-        for range in zcl.Cluster._registry_range.keys():
+        for range in zcl.Cluster._registry_range:
             if range[0] <= cluster <= range[1]:
                 return True
         return False
@@ -429,7 +443,7 @@ def test_quirk_importable(quirk: CustomDevice) -> None:
 
     path = f"{quirk.__module__}.{quirk.__name__}"
     assert all(
-        [m and m.isidentifier() for m in path.split(".")]
+        m and m.isidentifier() for m in path.split(".")
     ), f"{path} is not importable"
 
 
@@ -577,7 +591,10 @@ def test_zigpy_custom_cluster_pollution() -> None:
         )
 
 
-@pytest.mark.parametrize("module_name", {q.__module__ for q in ALL_QUIRK_CLASSES})
+@pytest.mark.parametrize(
+    "module_name",
+    sorted({q.__module__ for q in ALL_QUIRK_CLASSES}),
+)
 def test_no_module_level_device_automation_triggers(module_name: str) -> None:
     """Ensure no quirk module has a module-level `device_automation_triggers` dict."""
 
@@ -592,7 +609,7 @@ def test_migrated_lighting_automation_triggers(quirk: CustomDevice) -> None:
     if not hasattr(quirk, "device_automation_triggers"):
         return
 
-    for trigger, event in quirk.device_automation_triggers.items():
+    for event in quirk.device_automation_triggers.values():
         if COMMAND not in event:
             continue
 
@@ -642,12 +659,6 @@ KNOWN_DUPLICATE_TRIGGERS = {
             (zhaquirks.aurora.aurora_dimmer.COLOR_DOWN, const.LEFT),
         ],
     ],
-    zhaquirks.ikea.fourbtnremote.IkeaTradfriRemoteV1: [
-        [
-            (const.LONG_RELEASE, const.DIM_UP),
-            (const.LONG_RELEASE, const.DIM_DOWN),
-        ]
-    ],
     zhaquirks.paulmann.fourbtnremote.PaulmannRemote4Btn: [
         [
             (const.LONG_RELEASE, const.BUTTON_1),
@@ -667,6 +678,7 @@ KNOWN_DUPLICATE_TRIGGERS = {
 }
 
 
+# XXX: Test does not handle v2 quirks
 @pytest.mark.parametrize(
     "quirk",
     [q for q in ALL_QUIRK_CLASSES if getattr(q, "device_automation_triggers", None)],
@@ -717,7 +729,7 @@ def test_attributes_updated_not_replaced(quirk: CustomDevice) -> None:
     base_cluster_attrs_name = {}
     base_cluster_attrs_id = {}
 
-    for name, cluster in zcl.clusters.CLUSTERS_BY_NAME.items():
+    for cluster in zcl.clusters.CLUSTERS_BY_NAME.values():
         assert cluster.ep_attribute not in base_cluster_attrs_name
         base_cluster_attrs_name[cluster.ep_attribute] = set(
             cluster.attributes_by_name.keys()
@@ -726,13 +738,15 @@ def test_attributes_updated_not_replaced(quirk: CustomDevice) -> None:
             cluster.attributes_by_name.keys()
         )
 
-    for ep_id, ep_data in quirk.replacement[ENDPOINTS].items():
+    for ep_data in quirk.replacement[ENDPOINTS].values():
         for cluster in ep_data.get(INPUT_CLUSTERS, []) + ep_data.get(
             OUTPUT_CLUSTERS, []
         ):
-            if isinstance(cluster, int) or not issubclass(cluster, zcl.Cluster):
-                continue
-            elif cluster in ALL_ZIGPY_CLUSTERS:
+            if (
+                isinstance(cluster, int)
+                or not issubclass(cluster, zcl.Cluster)
+                or cluster in ALL_ZIGPY_CLUSTERS
+            ):
                 continue
 
             assert issubclass(cluster, zigpy.quirks.CustomCluster)
@@ -826,6 +840,43 @@ def test_no_duplicate_clusters(quirk: CustomDevice) -> None:
                 )
             used_cluster_ids.add(cluster_id)
 
-    for ep_id, ep_data in quirk.replacement[ENDPOINTS].items():
+    for ep_id, ep_data in quirk.replacement[ENDPOINTS].items():  # noqa: B007
         check_for_duplicate_cluster_ids(ep_data.get(INPUT_CLUSTERS, []))
         check_for_duplicate_cluster_ids(ep_data.get(OUTPUT_CLUSTERS, []))
+
+
+async def test_local_data_cluster(zigpy_device_from_v2_quirk) -> None:
+    """Ensure reading attributes from a LocalDataCluster works as expected."""
+
+    class TestLocalCluster(zhaquirks.LocalDataCluster):
+        """Test cluster."""
+
+        cluster_id = 0x1234
+        _CONSTANT_ATTRIBUTES = {1: 10}
+        _VALID_ATTRIBUTES = [2]
+
+    (
+        QuirkBuilder("manufacturer-local-test", "model")
+        .adds(TestLocalCluster)
+        .add_to_registry()
+    )
+    device = zigpy_device_from_v2_quirk("manufacturer-local-test", "model")
+    assert isinstance(device.endpoints[1].in_clusters[0x1234], TestLocalCluster)
+
+    # reading invalid attribute return unsupported attribute
+    assert await device.endpoints[1].in_clusters[0x1234].read_attributes([0]) == (
+        {},
+        {0: foundation.Status.UNSUPPORTED_ATTRIBUTE},
+    )
+
+    # reading constant attribute works
+    assert await device.endpoints[1].in_clusters[0x1234].read_attributes([1]) == (
+        {1: 10},
+        {},
+    )
+
+    # reading valid attribute returns None with success status
+    assert await device.endpoints[1].in_clusters[0x1234].read_attributes([2]) == (
+        {2: None},
+        {},
+    )

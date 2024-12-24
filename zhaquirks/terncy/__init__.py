@@ -1,7 +1,8 @@
 """Module for Terncy quirks."""
+
 from collections import deque
 import math
-from typing import Any, List, Optional, Union
+from typing import Any, Optional, Union
 
 from zigpy.quirks import CustomCluster
 import zigpy.types as t
@@ -149,7 +150,7 @@ class TerncyRawCluster(CustomCluster):
     def handle_cluster_request(
         self,
         hdr: foundation.ZCLHeader,
-        args: List[Any],
+        args: list[Any],
         *,
         dst_addressing: Optional[
             Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
@@ -163,8 +164,7 @@ class TerncyRawCluster(CustomCluster):
                 return  # ignore repeated event for single action.
             else:
                 self._last_clicks.append((state, count))
-            if state > 5:
-                state = 5
+            state = min(state, 5)
             event_args = {PRESS_TYPE: CLICK_TYPES[state], "count": count, VALUE: state}
             action = f"button_{CLICK_TYPES[state]}"
             self.listener_event(ZHA_SEND_EVENT, action, event_args)

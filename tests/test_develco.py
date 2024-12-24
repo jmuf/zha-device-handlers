@@ -1,11 +1,11 @@
 """Tests for Develco/Frient A/S quirks."""
+
 import pytest
 from zigpy.zcl.clusters.general import DeviceTemperature
 
+from tests.common import ClusterListener
 import zhaquirks.develco.motion
 import zhaquirks.develco.power_plug
-
-from tests.common import ClusterListener
 
 zhaquirks.setup()
 
