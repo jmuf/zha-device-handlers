@@ -1,4 +1,5 @@
 """Tuya EARU PC311-Z-TY Single-Phase Power Clamp."""
+
 import logging
 
 from zigpy.profiles import zha
